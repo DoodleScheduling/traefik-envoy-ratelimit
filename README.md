@@ -1,7 +1,6 @@
 # Traefik envoy ratelimit Adapter
 
 [![release](https://img.shields.io/github/release/DoodleScheduling/traefik-envoy-ratelimit/all.svg)](https://github.com/DoodleScheduling/traefik-envoy-ratelimit/releases)
-[![release](https://github.com/doodlescheduling/traefik-envoy-ratelimit/actions/workflows/release.yaml/badge.svg)](https://github.com/doodlescheduling/traefik-envoy-ratelimit/actions/workflows/release.yaml)
 [![report](https://goreportcard.com/badge/github.com/DoodleScheduling/traefik-envoy-ratelimit)](https://goreportcard.com/report/github.com/DoodleScheduling/traefik-envoy-ratelimit)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/DoodleScheduling/traefik-envoy-ratelimit/badge)](https://api.securityscorecards.dev/projects/github.com/DoodleScheduling/traefik-envoy-ratelimit)
 [![Coverage Status](https://coveralls.io/repos/github/DoodleScheduling/traefik-envoy-ratelimit/badge.svg?branch=master)](https://coveralls.io/github/DoodleScheduling/traefik-envoy-ratelimit?branch=master)
