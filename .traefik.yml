@@ -1,0 +1,7 @@
+displayName: Envoy Proxy Rate Limit Adapter
+type: middleware
+import: github.com/doodlescheduling/traefik-envoy-ratelimit
+summary: 'Rate-limit requests via an Envoy ratelimit service'
+testData:
+  serviceUrl: 'http://ratelimit:8080/json'
+  domain: 'default'
