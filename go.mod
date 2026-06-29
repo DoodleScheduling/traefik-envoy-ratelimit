@@ -1,4 +1,4 @@
-module github.com/doodlescheduling/traefik-envoy-ratelimit
+module github.com/DoodleScheduling/traefik-envoy-ratelimit
 
 go 1.26
 
