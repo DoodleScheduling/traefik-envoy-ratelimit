@@ -172,6 +172,10 @@ func (r *rateLimit) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	overLimit := resp.StatusCode == http.StatusTooManyRequests ||
 		strings.EqualFold(parsed.OverallCode, "OVER_LIMIT")
 
+	for _, h := range parsed.ResponseHeadersToAdd {
+		rw.Header().Add(h.Key, h.Value)
+	}
+
 	if overLimit {
 		rw.WriteHeader(http.StatusTooManyRequests)
 		_, _ = rw.Write([]byte("rate limit exceeded\n"))
@@ -180,10 +184,6 @@ func (r *rateLimit) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	for _, h := range parsed.RequestHeadersToAdd {
 		req.Header.Set(h.Key, h.Value)
-	}
-
-	for _, h := range parsed.ResponseHeadersToAdd {
-		rw.Header().Add(h.Key, h.Value)
 	}
 
 	r.next.ServeHTTP(rw, req)

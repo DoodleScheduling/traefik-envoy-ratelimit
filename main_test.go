@@ -118,6 +118,7 @@ func TestServeHTTP(t *testing.T) {
 					StatusCode: http.StatusTooManyRequests,
 					Header:     make(http.Header),
 				}
+				response.Header.Set("hello", "world")
 				return response
 			},
 			upstreamHandler: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
