@@ -6,8 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -35,7 +39,13 @@ type Config struct {
 
 	// HitsAddend is how many tokens each request consumes (default 1).
 	HitsAddend int `json:"hitsAddend,omitempty"`
+
+	// MaxBodyBytes caps how much of the request body is buffered to resolve
+	// "form:" entries (default 1MiB). Larger bodies leave form values unresolved.
+	MaxBodyBytes int64 `json:"maxBodyBytes,omitempty"`
 }
+
+const defaultMaxBodyBytes int64 = 1 << 20
 
 // DescriptorConfig is one descriptor: an ordered list of key/value entries.
 type DescriptorConfig struct {
@@ -55,14 +65,28 @@ type EntryConfig struct {
 	//   "host"                -> request host
 	//   "header:<HeaderName>" -> value of the given request header
 	//   "value:<literal>"     -> a fixed literal value (great for grouping routes)
+	//   "form:<FieldName>"    -> first value of the given field from an
+	//                            application/x-www-form-urlencoded or
+	//                            multipart/form-data request body
 	From string `json:"from,omitempty"`
+
+	// TrimSpace removes leading/trailing whitespace from the resolved value.
+	TrimSpace bool `json:"trimSpace,omitempty"`
+
+	// Lowercase lowercases the resolved value.
+	Lowercase bool `json:"lowercase,omitempty"`
+
+	// Default is used when the value cannot be resolved (or is empty after
+	// normalization). If unset, the whole descriptor is dropped instead.
+	Default string `json:"default,omitempty"`
 }
 
 // CreateConfig returns the default configuration. Required by Traefik.
 func CreateConfig() *Config {
 	return &Config{
-		TimeoutMs:  50,
-		HitsAddend: 1,
+		TimeoutMs:    50,
+		HitsAddend:   1,
+		MaxBodyBytes: defaultMaxBodyBytes,
 	}
 }
 
@@ -92,6 +116,9 @@ func New(_ context.Context, next http.Handler, cfg *Config, name string) (http.H
 	}
 	if cfg.HitsAddend <= 0 {
 		cfg.HitsAddend = 1
+	}
+	if cfg.MaxBodyBytes <= 0 {
+		cfg.MaxBodyBytes = defaultMaxBodyBytes
 	}
 
 	return &rateLimit{
@@ -190,15 +217,28 @@ func (r *rateLimit) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 // buildDescriptors mirrors Envoy's semantics: if any entry in a descriptor
-// resolves to no value, that whole descriptor is dropped (not sent).
+// resolves to no value (and has no default), that whole descriptor is dropped.
 func (r *rateLimit) buildDescriptors(req *http.Request) []rlsDescriptor {
+	values := &requestValues{req: req, maxBody: r.cfg.MaxBodyBytes}
 	out := make([]rlsDescriptor, 0, len(r.cfg.Descriptors))
 	for _, d := range r.cfg.Descriptors {
 		entries := make([]rlsEntry, 0, len(d.Entries))
 		drop := false
 		for _, e := range d.Entries {
-			val, ok := resolveValue(req, e.From)
-			if !ok || val == "" {
+			val, ok := resolveValue(values, e.From)
+			if !ok {
+				val = ""
+			}
+			if e.TrimSpace {
+				val = strings.TrimSpace(val)
+			}
+			if e.Lowercase {
+				val = strings.ToLower(val)
+			}
+			if val == "" {
+				val = e.Default
+			}
+			if val == "" {
 				drop = true
 				break
 			}
@@ -212,7 +252,29 @@ func (r *rateLimit) buildDescriptors(req *http.Request) []rlsDescriptor {
 	return out
 }
 
-func resolveValue(req *http.Request, from string) (string, bool) {
+// requestValues resolves values from a request and caches the parsed form body
+// so the body is read at most once per request.
+type requestValues struct {
+	req      *http.Request
+	maxBody  int64
+	form     url.Values
+	formDone bool
+}
+
+func (v *requestValues) formValue(name string) (string, bool) {
+	if !v.formDone {
+		v.formDone = true
+		v.form = parseFormBody(v.req, v.maxBody)
+	}
+	if v.form == nil {
+		return "", false
+	}
+	val := v.form.Get(name)
+	return val, val != ""
+}
+
+func resolveValue(v *requestValues, from string) (string, bool) {
+	req := v.req
 	switch {
 	case from == "remote_address":
 		return clientIP(req), true
@@ -227,8 +289,92 @@ func resolveValue(req *http.Request, from string) (string, bool) {
 		return v, v != ""
 	case strings.HasPrefix(from, "value:"):
 		return strings.TrimPrefix(from, "value:"), true
+	case strings.HasPrefix(from, "form:"):
+		return v.formValue(strings.TrimPrefix(from, "form:"))
 	default:
 		return "", false
+	}
+}
+
+// readCloser combines a replacement reader with the original body's Close.
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// parseFormBody buffers up to maxBody bytes of the request body, restores the
+// body so downstream handlers receive identical bytes, and parses form fields
+// from urlencoded or multipart bodies. Query string values are not included.
+// It returns nil if the body is not a form, too large, or unreadable.
+func parseFormBody(req *http.Request, maxBody int64) url.Values {
+	if req.Body == nil || req.Body == http.NoBody {
+		return nil
+	}
+	mediaType, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if err != nil {
+		return nil
+	}
+	if mediaType != "application/x-www-form-urlencoded" && mediaType != "multipart/form-data" {
+		return nil
+	}
+	if maxBody <= 0 {
+		maxBody = defaultMaxBodyBytes
+	}
+
+	// Read one byte past the limit to detect oversized bodies, without
+	// overflowing when maxBody is math.MaxInt64.
+	readLimit := maxBody
+	if readLimit < math.MaxInt64 {
+		readLimit++
+	}
+
+	orig := req.Body
+	buf, err := io.ReadAll(io.LimitReader(orig, readLimit))
+	if err != nil || int64(len(buf)) > maxBody {
+		// Hand downstream what we consumed followed by the rest of the stream.
+		req.Body = readCloser{io.MultiReader(bytes.NewReader(buf), orig), orig}
+		return nil
+	}
+	req.Body = readCloser{bytes.NewReader(buf), orig}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf)), nil
+	}
+
+	// Any parse or read error makes the whole form unresolved. Returning the
+	// pairs parsed around a malformed portion would risk resolving a different
+	// value than the backend's (more lenient or stricter) parser sees.
+	if mediaType == "application/x-www-form-urlencoded" {
+		values, err := url.ParseQuery(string(buf))
+		if err != nil {
+			return nil
+		}
+		return values
+	}
+
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil
+	}
+	values := url.Values{}
+	mr := multipart.NewReader(bytes.NewReader(buf), boundary)
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			return values
+		}
+		if err != nil {
+			return nil
+		}
+		if part.FileName() != "" || part.FormName() == "" {
+			_ = part.Close()
+			continue
+		}
+		data, err := io.ReadAll(part)
+		_ = part.Close()
+		if err != nil {
+			return nil
+		}
+		values.Add(part.FormName(), string(data))
 	}
 }
 

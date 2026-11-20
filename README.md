@@ -24,6 +24,42 @@ multiple routes managed by traefik. Similar what the distributed ratelimit from 
 | `host` | request host |
 | `header:<HeaderName>` | value of the given request header |
 | `value:<literal>` | a fixed literal value (great for grouping routes) |
+| `form:<FieldName>` | first value of the given field from the request body (see below) |
+
+## Entry options
+
+| Option | Description |
+| --- | --- |
+| `trimSpace` | strip leading/trailing whitespace from the resolved value |
+| `lowercase` | lowercase the resolved value |
+| `default` | value to use if the source can not be resolved (or is empty). Without a default the whole descriptor is dropped and the request is not limited by it |
+
+## Form values
+
+`form:<FieldName>` reads fields from `application/x-www-form-urlencoded` and `multipart/form-data` request bodies
+(file parts are ignored). Query string parameters are **not** considered. The body is buffered up to `maxBodyBytes`
+(default 1MiB) and handed unchanged to the upstream service.
+
+If the body uses another content type, is larger than `maxBodyBytes`, or the field is missing, the value is unresolved.
+When limiting sensitive endpoints (e.g. login or password reset) set a `default` so that clients can not
+bypass the limit by sending oversized or malformed bodies, and normalize the value the same way the backend does.
+Keep a per-IP descriptor alongside it: the per-user limit stops hammering a single account, the per-IP limit stops
+one client from cycling through many usernames. A request is limited if any descriptor is over its limit.
+
+```yaml
+descriptors:
+# per account
+- entries:
+  - key: reset_user
+    from: form:username
+    trimSpace: true
+    lowercase: true
+    default: __unresolved__
+# per client IP
+- entries:
+  - key: remote_address
+    from: remote_address
+```
 
 # Configuration
 
@@ -40,6 +76,7 @@ spec:
       serviceUrl: "http://ratelimit:8080/json"
       domain: mydomain
       failOnError: true
+      maxBodyBytes: 1048576
       descriptors:
       - entries:
         - key: namespace
