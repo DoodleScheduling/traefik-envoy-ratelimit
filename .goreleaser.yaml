@@ -1,0 +1,42 @@
+project_name: keycloak-controller
+
+builds:
+- id: manager
+  binary: manager
+  goos:
+  - linux
+  env:
+  - CGO_ENABLED=0
+
+archives:
+- id: manager
+  name_template: "manager_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  ids:
+  - manager
+
+checksum:
+  name_template: 'checksums.txt'
+
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source_code"
+
+changelog:
+  use: github-native
+
+sboms:
+- id: source
+  artifacts: source
+  documents:
+  - "{{ .ProjectName }}_{{ .Version }}_sbom.spdx.json"
+
+signs:
+- cmd: cosign
+  signature: "${artifact}.sigstore.json"
+  args:
+  - sign-blob
+  - "--bundle=${signature}"
+  - --yes
+  - "${artifact}"
+  artifacts: checksum
+  output: true
