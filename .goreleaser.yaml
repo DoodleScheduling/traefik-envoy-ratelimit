@@ -1,10 +1,9 @@
-project_name: keycloak-controller
+version: 2
 
-archives:
-- id: manager
-  name_template: "manager_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-  ids:
-  - manager
+project_name: traefik-envoy-ratelimit
+
+builds:
+- skip: true
 
 checksum:
   name_template: 'checksums.txt'
