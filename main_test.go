@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -467,6 +468,14 @@ func TestFormValues(t *testing.T) {
 			body:         []byte("username=alice&padding=" + strings.Repeat("a", 64)),
 		},
 		{
+			name:         "maxBodyBytes of MaxInt64 does not overflow",
+			entries:      []EntryConfig{formEntry},
+			maxBodyBytes: math.MaxInt64,
+			contentType:  "application/x-www-form-urlencoded",
+			body:         []byte("username=alice"),
+			expected:     []rlsEntry{{Key: "user", Value: "alice"}},
+		},
+		{
 			name:         "oversized body falls back to default",
 			entries:      []EntryConfig{{Key: "user", From: "form:username", Default: "__unresolved__"}},
 			maxBodyBytes: 16,
@@ -479,6 +488,41 @@ func TestFormValues(t *testing.T) {
 			entries:     []EntryConfig{{Key: "user", From: "form:username", Default: "__unresolved__"}},
 			contentType: "application/json",
 			body:        []byte(`{"username":"alice"}`),
+			expected:    []rlsEntry{{Key: "user", Value: "__unresolved__"}},
+		},
+		{
+			name:        "urlencoded body with invalid escape after the field falls back to default",
+			entries:     []EntryConfig{{Key: "user", From: "form:username", Default: "__unresolved__"}},
+			contentType: "application/x-www-form-urlencoded",
+			body:        []byte("username=victim&x=%zz"),
+			expected:    []rlsEntry{{Key: "user", Value: "__unresolved__"}},
+		},
+		{
+			// Go skips "username=x;y" while e.g. Netty would see it as the first value
+			name:        "urlencoded body with semicolon pair falls back to default",
+			entries:     []EntryConfig{{Key: "user", From: "form:username", Default: "__unresolved__"}},
+			contentType: "application/x-www-form-urlencoded",
+			body:        []byte("username=x;y&username=victim"),
+			expected:    []rlsEntry{{Key: "user", Value: "__unresolved__"}},
+		},
+		{
+			name:        "malformed urlencoded body without default drops descriptor",
+			entries:     []EntryConfig{formEntry},
+			contentType: "application/x-www-form-urlencoded",
+			body:        []byte("username=victim&x=%zz"),
+		},
+		{
+			name:        "truncated multipart body falls back to default",
+			entries:     []EntryConfig{{Key: "user", From: "form:username", Default: "__unresolved__"}},
+			contentType: "multipart/form-data; boundary=XYZ",
+			body:        []byte("--XYZ\r\nContent-Disposition: form-data; name=\"username\"\r\n\r\nvictim\r\n--XYZ\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\ntrunc"),
+			expected:    []rlsEntry{{Key: "user", Value: "__unresolved__"}},
+		},
+		{
+			name:        "multipart content type without boundary falls back to default",
+			entries:     []EntryConfig{{Key: "user", From: "form:username", Default: "__unresolved__"}},
+			contentType: "multipart/form-data",
+			body:        []byte("username=victim"),
 			expected:    []rlsEntry{{Key: "user", Value: "__unresolved__"}},
 		},
 		{

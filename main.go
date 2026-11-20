@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net"
@@ -320,8 +321,15 @@ func parseFormBody(req *http.Request, maxBody int64) url.Values {
 		maxBody = defaultMaxBodyBytes
 	}
 
+	// Read one byte past the limit to detect oversized bodies, without
+	// overflowing when maxBody is math.MaxInt64.
+	readLimit := maxBody
+	if readLimit < math.MaxInt64 {
+		readLimit++
+	}
+
 	orig := req.Body
-	buf, err := io.ReadAll(io.LimitReader(orig, maxBody+1))
+	buf, err := io.ReadAll(io.LimitReader(orig, readLimit))
 	if err != nil || int64(len(buf)) > maxBody {
 		// Hand downstream what we consumed followed by the rest of the stream.
 		req.Body = readCloser{io.MultiReader(bytes.NewReader(buf), orig), orig}
@@ -332,9 +340,14 @@ func parseFormBody(req *http.Request, maxBody int64) url.Values {
 		return io.NopCloser(bytes.NewReader(buf)), nil
 	}
 
+	// Any parse or read error makes the whole form unresolved. Returning the
+	// pairs parsed around a malformed portion would risk resolving a different
+	// value than the backend's (more lenient or stricter) parser sees.
 	if mediaType == "application/x-www-form-urlencoded" {
-		// On malformed pairs ParseQuery still returns the valid ones.
-		values, _ := url.ParseQuery(string(buf))
+		values, err := url.ParseQuery(string(buf))
+		if err != nil {
+			return nil
+		}
 		return values
 	}
 
@@ -346,8 +359,11 @@ func parseFormBody(req *http.Request, maxBody int64) url.Values {
 	mr := multipart.NewReader(bytes.NewReader(buf), boundary)
 	for {
 		part, err := mr.NextPart()
+		if err == io.EOF {
+			return values
+		}
 		if err != nil {
-			break
+			return nil
 		}
 		if part.FileName() != "" || part.FormName() == "" {
 			_ = part.Close()
@@ -356,11 +372,10 @@ func parseFormBody(req *http.Request, maxBody int64) url.Values {
 		data, err := io.ReadAll(part)
 		_ = part.Close()
 		if err != nil {
-			break
+			return nil
 		}
 		values.Add(part.FormName(), string(data))
 	}
-	return values
 }
 
 func clientIP(req *http.Request) string {

@@ -42,16 +42,23 @@ multiple routes managed by traefik. Similar what the distributed ratelimit from 
 
 If the body uses another content type, is larger than `maxBodyBytes`, or the field is missing, the value is unresolved.
 When limiting sensitive endpoints (e.g. login or password reset) set a `default` so that clients can not
-bypass the limit by sending oversized or malformed bodies, and normalize the value the same way the backend does:
+bypass the limit by sending oversized or malformed bodies, and normalize the value the same way the backend does.
+Keep a per-IP descriptor alongside it: the per-user limit stops hammering a single account, the per-IP limit stops
+one client from cycling through many usernames. A request is limited if any descriptor is over its limit.
 
 ```yaml
 descriptors:
+# per account
 - entries:
   - key: reset_user
     from: form:username
     trimSpace: true
     lowercase: true
     default: __unresolved__
+# per client IP
+- entries:
+  - key: remote_address
+    from: remote_address
 ```
 
 # Configuration
