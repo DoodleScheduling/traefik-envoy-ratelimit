@@ -1,13 +1,5 @@
 project_name: keycloak-controller
 
-builds:
-- id: manager
-  binary: manager
-  goos:
-  - linux
-  env:
-  - CGO_ENABLED=0
-
 archives:
 - id: manager
   name_template: "manager_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
